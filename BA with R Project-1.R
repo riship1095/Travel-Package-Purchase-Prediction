@@ -4,18 +4,20 @@ install.packages("rpart.plot")
 install.packages("caret")
 install.packages("pROC")
 install.packages('epiDisplay')
-
-
+install.packages("ggplot2")
+install.packages("ROCR")
 library(epiDisplay)
 library(rpart)
 library(rpart.plot)
 library(caret)
 library(pROC)
-
+library(ggplot2)
+library(ROCR)
+library(randomForest)
 
 #Reading the Data####
 
-data = read.csv("tour_package.csv"); 
+data = read.csv("C:\\Users\\DELL\\Downloads\\tour_package.csv")
 head(data)
 
 #Checking Null Values####
@@ -98,6 +100,7 @@ hist(data$MonthlyIncome,
 
 data$Age[is.na(data$Age)] = mean(data$Age,na.rm=TRUE)
 data$DurationOfPitch[is.na(data$DurationOfPitch)] = median(data$DurationOfPitch,na.rm=TRUE)
+
 data$NumberOfFollowups[is.na(data$NumberOfFollowups)] = median(data$NumberOfFollowups,na.rm=TRUE)
 data$PreferredPropertyStar[is.na(data$PreferredPropertyStar)] = mean(data$PreferredPropertyStar,na.rm=TRUE)
 data$NumberOfTrips[is.na(data$NumberOfTrips)] = median(data$NumberOfTrips,na.rm=TRUE)
@@ -122,6 +125,7 @@ hist(data$DurationOfPitch,
      ylim=c(0,3500),
      xlim=c(0,60),
      xlab='Duration of Pitch')
+
 
 hist(data$NumberOfFollowups,
      breaks = 7,
@@ -150,39 +154,69 @@ hist(data$MonthlyIncome,
 
 # Correlation ####
 
-plot(round(data.frame(cor(data[-c(1,4,8,7,11,13,19)])),2))
+#plot(round(data.frame(cor(data[-c(1,4,8,7,11,13,19)])),2))
+install.packages ('corrplot')
+library(corrplot)
+corrplot(cor(data))
+
+
+palette = colorRampPalette(c("green", "white", "red")) (20)
+heatmap(x = data.cor, col = palette, symm = TRUE)
 
 #Exporting the DataSet ####
 TravelPackage <- data[,-c(1)]
 View(TravelPackage)
-split.index <- seq(1,4888,by=1.2)
+split.index <- seq(1,4888,by=1.66)
 train.df <- TravelPackage[split.index,]
 valid.df <- TravelPackage[-split.index,]
 
-
+#create a classification tree
 default.ct.train <- rpart(ProdTaken ~.,data = train.df, method = "class" )
 rpart.plot(default.ct.train)
-default.ct.pred.train <- predict(default.ct.train,train.df,type="class")
-confusionMatrix(default.ct.pred.train,as.factor(train.df$ProdTaken))
-default.ct.valid <- rpart(ProdTaken ~.,data = valid.df, method = "class" )
-rpart.plot(default.ct.valid)
-default.ct.pred.valid <- predict(default.ct.valid,valid.df,type="class")
-confusionMatrix(default.ct.pred.valid,as.factor(valid.df$ProdTaken))
+default.ct.pred.valid <- predict(default.ct.train,valid.df,type="class")
+# generate confusion matrix for predicted data
+confusionMatrix(as.factor(valid.df$ProdTaken),default.ct.pred.valid)
 
+#Logistic regression
 logit.reg.train = glm(ProdTaken ~ ., data= train.df, family ="binomial")
 options(scipen =999)
 summary(logit.reg.train)
-logit.reg.pred.train = predict(logit.reg.train, train.df, type ="response")
-confusionMatrix(as.factor(ifelse(logit.reg.pred.train>0.5,1,0)) ,as.factor(train.df$ProdTaken))
+logit.reg.pred.valid = predict(logit.reg.train, valid.df, type ="response")
+# generate confusion matrix for predicted data
+confusionMatrix(as.factor(valid.df$ProdTaken),as.factor(ifelse(logit.reg.pred.valid>0.5,1,0)),mode='everything')
+
+#plot the variables by order of importance
+v <- varImp(logit.reg.train)
+ggplot(v, aes(x=reorder(rownames(v),Overall), y=Overall)) +
+  geom_point( color="slateblue4", size=3, alpha=0.8)+
+  geom_segment( aes(x=rownames(v), xend=rownames(v), y=0, yend=Overall), 
+                color='turquoise4') +
+  xlab('Variable')+
+  ylab('Overall Importance')+
+  theme_light() +
+  coord_flip()
+
+#Random forest classifier
+ProdTaken <- as.factor(valid.df$ProdTaken)
+rf <- randomForest(ProdTaken ~ ., data = train.df, 
+                   ntree = 500, mtry = 4, nodesize = 1, importance = TRUE, sampsize = 500) 
+
+#plot the variables by order of importance
+varImpPlot(rf, type = 1)
+
+#create a confusion matrix
+
+rf.pred <- predict(rf, valid.df)
+confusionMatrix(as.factor(ifelse(rf.pred>0.5,1,0)) ,as.factor(valid.df$ProdTaken), mode='everything')
+
+t.df.rand <- data.frame("Predicted" = rf.pred, "Label" = as.factor(valid.df$ProdTaken))
+t.df.rand
+
+pred.random <- prediction(as.numeric(t.df.rand$Predicted), as.numeric(t.df.rand$Label))
+perf.rand <- performance( pred.random, "tpr", "fpr" )
 
 
-logit.reg.valid = glm(ProdTaken ~ ., data= valid.df, family ="binomial")
-options(scipen =999)
-summary(logit.reg.valid)
-logit.reg.pred.valid = predict(logit.reg.valid, valid.df, type ="response")
-confusionMatrix(as.factor(ifelse(logit.reg.pred.valid>0.5,1,0)) ,as.factor(valid.df$ProdTaken))
-
-rdt <- roc(valid.df$ProdTaken,default.ct.pred.valid[,1])
+rdt <- roc(valid.df$ProdTaken,as.numeric(default.ct.pred.valid))
 plot.roc(rdt)
 auc(rdt)
 
@@ -190,3 +224,21 @@ rlr <- roc(valid.df$ProdTaken,logit.reg.pred.valid)
 plot.roc(rlr)
 auc(rlr)
 
+rfr <- roc(valid.df$ProdTaken,rf.pred)
+plot.roc(rfr)
+auc(rfr)
+
+#Bar Plot
+
+new_data <- data[data$ProdTaken ==1,]
+counts1 <- table(new_data$ProdTaken,new_data$NumberOfPersonVisiting)
+barplot(counts1,xlab="Number of Persons Visiting",ylab="No of Purchases")
+
+counts2 <- table(new_data$ProdTaken,new_data$Passport)
+barplot(counts2,xlab="Passport",ylab="No of Purchases")
+
+counts3 <- table(new_data$ProdTaken,new_data$Designation)
+barplot(counts3,xlab="Designation",ylab="No of Purchases")
+
+counts4 <- table(new_data$ProdTaken,new_data$ProductPitched)
+barplot(counts4,xlab="Type of Package",ylab="No of Purchases")
